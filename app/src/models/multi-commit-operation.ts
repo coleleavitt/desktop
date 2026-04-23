@@ -1,4 +1,5 @@
 import { MultiCommitOperationConflictState } from '../lib/app-state'
+import type { ICopilotConflictResolutionState } from '../lib/app-state'
 import { Branch } from './branch'
 import { Commit, CommitOneLine, ICommitContext } from './commit'
 import { GitHubRepository } from './github-repository'
@@ -130,6 +131,8 @@ export type ShowProgressStep = {
 export type ShowConflictsStep = {
   readonly kind: MultiCommitOperationStepKind.ShowConflicts
   readonly conflictState: MultiCommitOperationConflictState
+  /** When set, the Copilot conflict resolution mode is active. */
+  readonly copilotConflictResolutionState?: ICopilotConflictResolutionState
 }
 
 export type HideConflictsStep = {

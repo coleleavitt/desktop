@@ -138,6 +138,8 @@ import {
   ICompareState,
   CommitOptions,
 } from '../app-state'
+import type { ICopilotConflictResolutionState } from '../app-state'
+import { applyCopilotResolutionsToWorkingDirectory } from '../copilot-conflict-resolution-apply'
 import type { ModelInfo } from '@github/copilot-sdk'
 import {
   findEditorOrDefault,
@@ -8092,6 +8094,140 @@ export class AppStore extends TypedBaseStore<IAppState> {
   public _endMultiCommitOperation(repository: Repository): void {
     this.repositoryStateCache.clearMultiCommitOperationState(repository)
     this.emitUpdate()
+  }
+
+  /** This shouldn't be called directly. See `Dispatcher`. */
+  public _startCopilotConflictResolution(repository: Repository): void {
+    const state = this.repositoryStateCache.get(repository)
+    const mcoState = state.multiCommitOperationState
+    if (
+      mcoState === null ||
+      mcoState.step.kind !== MultiCommitOperationStepKind.ShowConflicts
+    ) {
+      return
+    }
+
+    const requestId = Date.now()
+
+    // Set loading state
+    this._setCopilotConflictResolutionState(repository, {
+      kind: 'loading',
+      requestId,
+    })
+
+    // TODO: Wire to CopilotStore.resolveConflicts() once engine PR (#21921) lands.
+    // For now this just sets loading state; the engine integration will come
+    // when the engine PR is merged.
+  }
+
+  /** This shouldn't be called directly. See `Dispatcher`. */
+  public _setCopilotConflictResolutionState(
+    repository: Repository,
+    copilotState: ICopilotConflictResolutionState | undefined
+  ): void {
+    const state = this.repositoryStateCache.get(repository)
+    const mcoState = state.multiCommitOperationState
+    if (
+      mcoState === null ||
+      mcoState.step.kind !== MultiCommitOperationStepKind.ShowConflicts
+    ) {
+      return
+    }
+
+    // Guard against stale async results: if we're transitioning to
+    // ready/error while a loading state is active, verify the requestId
+    // matches. A cancel (→ undefined) or retry (→ new loading with a
+    // different requestId) may have occurred while the engine was working.
+    const currentCopilotState = mcoState.step.copilotConflictResolutionState
+    if (
+      copilotState !== undefined &&
+      copilotState.kind !== 'loading' &&
+      currentCopilotState !== undefined &&
+      currentCopilotState.kind === 'loading' &&
+      copilotState.requestId !== currentCopilotState.requestId
+    ) {
+      log.debug(
+        '[_setCopilotConflictResolutionState] Discarding stale result ' +
+          `(expected requestId ${currentCopilotState.requestId}, ` +
+          `got ${copilotState.requestId})`
+      )
+      return
+    }
+
+    this.repositoryStateCache.updateMultiCommitOperationState(
+      repository,
+      () => ({
+        step: {
+          ...mcoState.step,
+          copilotConflictResolutionState: copilotState,
+        },
+      })
+    )
+
+    this.emitUpdate()
+  }
+
+  /**
+   * Apply accepted Copilot conflict resolutions to the working directory.
+   *
+   * Reads the current copilot state, builds a resolution map from accepted
+   * files, writes them to disk, and reports any failures. Returns true if
+   * all accepted files were successfully written.
+   *
+   * This shouldn't be called directly. See `Dispatcher`.
+   */
+  public async _applyCopilotResolutions(
+    repository: Repository
+  ): Promise<boolean> {
+    const state = this.repositoryStateCache.get(repository)
+    const mcoState = state.multiCommitOperationState
+    if (
+      mcoState === null ||
+      mcoState.step.kind !== MultiCommitOperationStepKind.ShowConflicts
+    ) {
+      return false
+    }
+
+    const copilotState = mcoState.step.copilotConflictResolutionState
+    if (copilotState === undefined || copilotState.kind !== 'ready') {
+      return false
+    }
+
+    // Build a map of path → resolvedContent for accepted files
+    const resolutions = new Map<string, string>()
+    for (const resolution of copilotState.response.resolutions) {
+      if (copilotState.acceptedFiles.has(resolution.path)) {
+        resolutions.set(resolution.path, resolution.resolvedContent)
+      }
+    }
+
+    if (resolutions.size === 0) {
+      log.warn('[_applyCopilotResolutions] No accepted resolutions to apply')
+      return false
+    }
+
+    const result = await applyCopilotResolutionsToWorkingDirectory(
+      repository.path,
+      resolutions
+    )
+
+    if (result.failedFiles.length > 0) {
+      const failedPaths = result.failedFiles
+        .map(f => `${f.path}: ${f.error}`)
+        .join('; ')
+      log.error(`[_applyCopilotResolutions] Failed to write: ${failedPaths}`)
+      this._setCopilotConflictResolutionState(repository, {
+        kind: 'error',
+        requestId: copilotState.requestId,
+        error: `Failed to apply resolutions for ${result.failedFiles.length} file(s). You can retry or resolve manually.`,
+      })
+      return false
+    }
+
+    log.info(
+      `[_applyCopilotResolutions] Applied ${result.appliedFiles.length} resolutions`
+    )
+    return true
   }
 
   /** This shouldn't be called directly. See `Dispatcher`. */

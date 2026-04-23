@@ -1,0 +1,105 @@
+// Styles for Copilot conflict resolution UI components
+
+// "Resolve with Copilot" button in the conflicts dialog footer
+.conflicts-footer-with-copilot {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+
+  .copilot-resolve-button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+}
+
+// Loading interstitial
+#copilot-conflict-resolution-loading {
+  .copilot-conflict-loading-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: var(--spacing-double) 0;
+    gap: var(--spacing);
+
+    .copilot-thinking {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-half);
+      font-size: var(--font-size-lg);
+
+      .octicon {
+        width: 24px;
+        height: 24px;
+        animation: copilot-pulse 1.5s ease-in-out infinite;
+      }
+    }
+
+    .copilot-error-icon {
+      width: 32px;
+      height: 32px;
+      color: var(--dialog-error-color);
+    }
+
+    .copilot-conflict-loading-description {
+      color: var(--text-secondary-color);
+      font-size: var(--font-size-sm);
+    }
+  }
+
+  .copilot-loading-footer {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+}
+
+// Shell resolution dialog (MVP)
+#copilot-conflict-resolution-dialog {
+  .copilot-resolution-summary {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: var(--spacing-double) 0;
+    gap: var(--spacing);
+
+    .copilot-resolution-icon .octicon {
+      width: 32px;
+      height: 32px;
+    }
+
+    .copilot-resolution-message {
+      font-size: var(--font-size);
+      font-weight: var(--font-weight-semibold);
+    }
+
+    .copilot-resolution-warning {
+      color: var(--text-secondary-color);
+      font-size: var(--font-size-sm);
+    }
+  }
+
+  .copilot-resolution-footer {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+  }
+}
+
+@keyframes copilot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}

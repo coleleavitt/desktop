@@ -24,6 +24,7 @@ import {
   IMultiCommitOperationState,
   CommitOptions,
 } from '../../lib/app-state'
+import type { ICopilotConflictResolutionState } from '../../lib/app-state'
 import { assertNever, fatalError } from '../../lib/fatal-error'
 import {
   setGenericPassword,
@@ -3781,6 +3782,34 @@ export class Dispatcher {
   /** Method to clear multi commit operation state. */
   public endMultiCommitOperation(repository: Repository) {
     this.appStore._endMultiCommitOperation(repository)
+  }
+
+  /**
+   * Start Copilot-powered conflict resolution for the current merge.
+   * Sets the loading state and delegates to the app store to call the engine.
+   */
+  public startCopilotConflictResolution(repository: Repository): void {
+    this.appStore._startCopilotConflictResolution(repository)
+  }
+
+  /**
+   * Update the Copilot conflict resolution state on the current ShowConflicts
+   * step. Pass undefined to exit Copilot mode and return to the standard
+   * conflicts dialog.
+   */
+  public setCopilotConflictResolutionState(
+    repository: Repository,
+    state: ICopilotConflictResolutionState | undefined
+  ): void {
+    this.appStore._setCopilotConflictResolutionState(repository, state)
+  }
+
+  /**
+   * Apply accepted Copilot resolutions to the working directory.
+   * Returns true if all accepted files were successfully written.
+   */
+  public applyCopilotResolutions(repository: Repository): Promise<boolean> {
+    return this.appStore._applyCopilotResolutions(repository)
   }
 
   /** Opens conflicts found banner for part of multi commit operation */

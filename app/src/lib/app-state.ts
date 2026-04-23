@@ -56,6 +56,7 @@ import { RepoRulesInfo } from '../models/repo-rules'
 import { IAPIRepoRuleset } from './api'
 import { ICustomIntegration } from './custom-integration'
 import { Emoji } from './emoji'
+import { ICopilotConflictResolutionResponse } from './copilot-conflict-resolution'
 import { IUpdateState } from '../ui/lib/update-store'
 
 export enum SelectionType {
@@ -1011,6 +1012,32 @@ export function isCherryPickConflictState(
 ): conflictStatus is CherryPickConflictState {
   return conflictStatus.kind === 'cherryPick'
 }
+
+/**
+ * Tracks the state of Copilot-powered conflict resolution within the
+ * ShowConflicts step. When undefined, the standard conflicts dialog is shown.
+ *
+ * Each request carries a `requestId` (from `Date.now()` at launch time) so
+ * that late-arriving results from a cancelled or superseded request can be
+ * safely discarded.
+ */
+export type ICopilotConflictResolutionState =
+  | { readonly kind: 'loading'; readonly requestId: number }
+  | {
+      readonly kind: 'ready'
+      readonly requestId: number
+      readonly response: ICopilotConflictResolutionResponse
+      /**
+       * Files the user has accepted Copilot's suggestion for. The resolved
+       * content is written to disk only when the user clicks "Continue Merge".
+       */
+      readonly acceptedFiles: ReadonlySet<string>
+    }
+  | {
+      readonly kind: 'error'
+      readonly requestId: number
+      readonly error: string
+    }
 
 /**
  * Tracks the state of the app during a multi commit operation such as rebase,

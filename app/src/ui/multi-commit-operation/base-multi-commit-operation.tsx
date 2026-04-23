@@ -15,6 +15,10 @@ import { PopupType } from '../../models/popup'
 import { Account } from '../../models/account'
 import { IAPIRepoRuleset } from '../../lib/api'
 import { Emoji } from '../../lib/emoji'
+import {
+  CopilotConflictResolutionDialog,
+  CopilotConflictResolutionLoading,
+} from '../copilot-conflict-resolution'
 
 export interface IMultiCommitOperationProps {
   readonly repository: Repository
@@ -61,6 +65,15 @@ export abstract class BaseMultiCommitOperation extends React.Component<IMultiCom
   protected abstract onConflictsDialogDismissed: () => void
   protected abstract renderChooseBranch: () => JSX.Element | null
   protected abstract renderCreateBranch: () => JSX.Element | null
+
+  /**
+   * Override in subclasses that support Copilot conflict resolution (Merge).
+   * Returns a callback to initiate Copilot resolution, or undefined if not
+   * supported for this operation type.
+   */
+  protected getOnResolveWithCopilot(): (() => void) | undefined {
+    return undefined
+  }
 
   protected onFlowEnded = () => {
     this.props.dispatcher.closePopup(PopupType.MultiCommitOperation)
@@ -158,6 +171,39 @@ export abstract class BaseMultiCommitOperation extends React.Component<IMultiCom
     this.props.dispatcher.setConflictsResolved(this.props.repository)
   }
 
+  private onCancelCopilotMode = () => {
+    const { dispatcher, repository } = this.props
+    dispatcher.setCopilotConflictResolutionState(repository, undefined)
+  }
+
+  private onRetryCopilotResolution = () => {
+    const { dispatcher, repository } = this.props
+    dispatcher.startCopilotConflictResolution(repository)
+  }
+
+  private onContinueCopilotMerge = async () => {
+    const { repository, dispatcher, state } = this.props
+    const { step } = state
+
+    if (step.kind !== MultiCommitOperationStepKind.ShowConflicts) {
+      return
+    }
+
+    const copilotState = step.copilotConflictResolutionState
+    if (copilotState === undefined || copilotState.kind !== 'ready') {
+      return
+    }
+
+    // Apply resolutions to disk; on failure the AppStore sets error state
+    const success = await dispatcher.applyCopilotResolutions(repository)
+    if (!success) {
+      return
+    }
+
+    // Resolutions written — proceed with the normal merge continuation
+    await this.onContinueAfterConflicts()
+  }
+
   public render() {
     const { state } = this.props
     const { step } = state
@@ -188,13 +234,60 @@ export abstract class BaseMultiCommitOperation extends React.Component<IMultiCom
 
         const { userHasResolvedConflicts, operationDetail } = state
         const { manualResolutions, ourBranch, theirBranch } = step.conflictState
+        const copilotState = step.copilotConflictResolutionState
 
         const operation = __DARWIN__
           ? operationDetail.kind
           : operationDetail.kind.toLowerCase()
         const submit = `Continue ${operation}`
         const abort = `Abort ${operation}`
+        const headerTitle = `Resolve conflicts before ${operationDetail.kind}`
 
+        // Copilot loading state — show loading dialog
+        if (copilotState !== undefined && copilotState.kind === 'loading') {
+          return (
+            <CopilotConflictResolutionLoading
+              headerTitle={headerTitle}
+              abortButton={abort}
+              error={null}
+              onCancel={this.onCancelCopilotMode}
+              onRetry={this.onRetryCopilotResolution}
+              onAbort={this.onAbort}
+            />
+          )
+        }
+
+        // Copilot error state — show loading dialog with error
+        if (copilotState !== undefined && copilotState.kind === 'error') {
+          return (
+            <CopilotConflictResolutionLoading
+              headerTitle={headerTitle}
+              abortButton={abort}
+              error={copilotState.error}
+              onCancel={this.onCancelCopilotMode}
+              onRetry={this.onRetryCopilotResolution}
+              onAbort={this.onAbort}
+            />
+          )
+        }
+
+        // Copilot ready state — show shell resolution dialog
+        if (copilotState !== undefined && copilotState.kind === 'ready') {
+          return (
+            <CopilotConflictResolutionDialog
+              headerTitle={headerTitle}
+              submitButton={submit}
+              abortButton={abort}
+              copilotResponse={copilotState.response}
+              onSubmit={this.onContinueCopilotMerge}
+              onAbort={this.onConfirmingAbort}
+              onDismissed={this.onConflictsDialogDismissed}
+              onExitCopilotMode={this.onCancelCopilotMode}
+            />
+          )
+        }
+
+        // Default: standard conflicts dialog
         return (
           <ConflictsDialog
             dispatcher={dispatcher}
@@ -205,7 +298,7 @@ export abstract class BaseMultiCommitOperation extends React.Component<IMultiCom
             ourBranch={ourBranch}
             theirBranch={theirBranch}
             manualResolutions={manualResolutions}
-            headerTitle={`Resolve conflicts before ${operationDetail.kind}`}
+            headerTitle={headerTitle}
             submitButton={submit}
             abortButton={abort}
             onSubmit={this.onContinueAfterConflicts}
@@ -214,6 +307,7 @@ export abstract class BaseMultiCommitOperation extends React.Component<IMultiCom
             openFileInExternalEditor={openFileInExternalEditor}
             openRepositoryInShell={openRepositoryInShell}
             someConflictsHaveBeenResolved={this.setConflictsHaveBeenResolved}
+            onResolveWithCopilot={this.getOnResolveWithCopilot()}
           />
         )
       }
