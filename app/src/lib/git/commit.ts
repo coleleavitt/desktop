@@ -3,6 +3,7 @@ import {
   GitError,
   HookCallbackOptions,
   IGitStringExecutionOptions,
+  IGitStringResult,
   parseCommitSHA,
 } from './core'
 import { stageFiles } from './update-index'
@@ -11,6 +12,9 @@ import { WorkingDirectoryFileChange } from '../../models/status'
 import { unstageAll } from './reset'
 import { ManualConflictResolution } from '../../models/manual-conflict-resolution'
 import { stageManualConflictResolution } from './stage'
+import { wslGitExec } from './wsl-git-exec'
+import { isWSLPath } from '../is-wsl-path'
+import { enableWSLNativeCommit } from '../feature-flag'
 
 const statusInPageErrorExitCodes = new Set([3221225478, -1073741818])
 
@@ -67,6 +71,54 @@ async function gitCommitWithStatusInPageRetry(
   }
 }
 
+function shouldRouteCommitThroughWSL(repositoryPath: string) {
+  return (
+    __WIN32__ && enableWSLNativeCommit() && isWSLPath(repositoryPath)
+  )
+}
+
+async function wslCommit(
+  repository: Repository,
+  args: ReadonlyArray<string>,
+  name: string,
+  message?: string
+): Promise<IGitStringResult> {
+  const fullArgs = ['commit', ...args]
+
+  const result = await wslGitExec(fullArgs, repository.path, {
+    stdin: message,
+    encoding: 'utf8',
+  })
+
+  const stdout = result.stdout.toString('utf8')
+  const stderr = result.stderr.toString('utf8')
+
+  if (result.exitCode !== 0) {
+    throw new GitError(
+      {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        gitError: null,
+        gitErrorDescription: null,
+        path: repository.path,
+      },
+      fullArgs,
+      stderr
+    )
+  }
+
+  log.debug(`[${name}] completed via WSL native git`)
+  return {
+    stdout,
+    stderr,
+    exitCode: result.exitCode,
+    gitError: null,
+    gitErrorDescription: null,
+    path: repository.path,
+  }
+}
+
 /**
  * @param repository repository to execute merge in
  * @param message commit message
@@ -109,26 +161,28 @@ export async function createCommit(
     args.push('--allow-empty')
   }
 
-  const result = await gitCommitWithStatusInPageRetry(
-    repository,
-    ['commit', ...args],
-    'createCommit',
-    {
-      stdin: message,
-      // https://git-scm.com/docs/githooks/2.46.1
-      interceptHooks: [
-        'pre-commit',
-        'prepare-commit-msg',
-        'commit-msg',
-        'post-commit',
-        ...(options?.amend ? ['post-rewrite'] : []),
-        'pre-auto-gc',
-      ],
-      onHookProgress: options?.onHookProgress,
-      onHookFailure: options?.onHookFailure,
-      onTerminalOutputAvailable: options?.onTerminalOutputAvailable,
-    }
-  )
+  const result = shouldRouteCommitThroughWSL(repository.path)
+    ? await wslCommit(repository, args, 'createCommit', message)
+    : await gitCommitWithStatusInPageRetry(
+        repository,
+        ['commit', ...args],
+        'createCommit',
+        {
+          stdin: message,
+          // https://git-scm.com/docs/githooks/2.46.1
+          interceptHooks: [
+            'pre-commit',
+            'prepare-commit-msg',
+            'commit-msg',
+            'post-commit',
+            ...(options?.amend ? ['post-rewrite'] : []),
+            'pre-auto-gc',
+          ],
+          onHookProgress: options?.onHookProgress,
+          onHookFailure: options?.onHookFailure,
+          onTerminalOutputAvailable: options?.onTerminalOutputAvailable,
+        }
+      )
   return parseCommitSHA(result)
 }
 
@@ -160,38 +214,42 @@ export async function createMergeCommit(
   const otherFiles = files.filter(f => !manualResolutions.has(f.path))
 
   await stageFiles(repository, otherFiles)
-  const result = await gitCommitWithStatusInPageRetry(
-    repository,
-    [
-      'commit',
-      // no-edit here ensures the app does not accidentally invoke the user's editor
-      '--no-edit',
-      // By default Git merge commits do not contain any commentary (which
-      // are lines prefixed with `#`). This works because the Git CLI will
-      // prompt the user to edit the file in `.git/COMMIT_MSG` before
-      // committing, and then it will run `--cleanup=strip`.
-      //
-      // This clashes with our use of `--no-edit` above as Git will now change
-      // it's behavior to invoke `--cleanup=whitespace` as it did not ask
-      // the user to edit the COMMIT_MSG as part of creating a commit.
-      //
-      // From the docs on git-commit (https://git-scm.com/docs/git-commit) I'll
-      // quote the relevant section:
-      // --cleanup=<mode>
-      //     strip
-      //        Strip leading and trailing empty lines, trailing whitespace,
-      //        commentary and collapse consecutive empty lines.
-      //     whitespace
-      //        Same as `strip` except #commentary is not removed.
-      //     default
-      //        Same as `strip` if the message is to be edited. Otherwise `whitespace`.
-      //
-      // We should emulate the behavior in this situation because we don't
-      // let the user view or change the commit message before making the
-      // commit.
-      '--cleanup=strip',
-    ],
-    'createMergeCommit'
-  )
+
+  const mergeCommitArgs = [
+    // no-edit here ensures the app does not accidentally invoke the user's editor
+    '--no-edit',
+    // By default Git merge commits do not contain any commentary (which
+    // are lines prefixed with `#`). This works because the Git CLI will
+    // prompt the user to edit the file in `.git/COMMIT_MSG` before
+    // committing, and then it will run `--cleanup=strip`.
+    //
+    // This clashes with our use of `--no-edit` above as Git will now change
+    // it's behavior to invoke `--cleanup=whitespace` as it did not ask
+    // the user to edit the COMMIT_MSG as part of creating a commit.
+    //
+    // From the docs on git-commit (https://git-scm.com/docs/git-commit) I'll
+    // quote the relevant section:
+    // --cleanup=<mode>
+    //     strip
+    //        Strip leading and trailing empty lines, trailing whitespace,
+    //        commentary and collapse consecutive empty lines.
+    //     whitespace
+    //        Same as `strip` except #commentary is not removed.
+    //     default
+    //        Same as `strip` if the message is to be edited. Otherwise `whitespace`.
+    //
+    // We should emulate the behavior in this situation because we don't
+    // let the user view or change the commit message before making the
+    // commit.
+    '--cleanup=strip',
+  ]
+
+  const result = shouldRouteCommitThroughWSL(repository.path)
+    ? await wslCommit(repository, mergeCommitArgs, 'createMergeCommit')
+    : await gitCommitWithStatusInPageRetry(
+        repository,
+        ['commit', ...mergeCommitArgs],
+        'createMergeCommit'
+      )
   return parseCommitSHA(result)
 }

@@ -55,6 +55,30 @@ export function enableWSLPerformanceOptimizations(): boolean {
 }
 
 /**
+ * Should `git commit` on WSL repository paths run via `wsl.exe -e git`
+ * instead of Windows `git.exe`?
+ *
+ * When enabled, commits on `\\wsl.localhost\` and `\\wsl$\` paths execute
+ * inside the WSL distro, avoiding the 9P filesystem boundary entirely. This
+ * sidesteps the Windows kernel-level STATUS_IN_PAGE_ERROR (0xC0000006) crash
+ * that affects Git for Windows when writing to ext4 via the 9P provider.
+ *
+ * Tradeoffs (documented in commit.ts):
+ *  - Hook output is not surfaced through Desktop's hook progress UI
+ *  - Hooks cannot use Desktop's credential helper / askpass
+ *  - GPG signing relies on WSL-side gpg-agent
+ *
+ * Defaults to true alongside the rest of the WSL performance work; users can
+ * disable via `GITHUB_DESKTOP_WSL_NATIVE_COMMIT=false`.
+ */
+export function enableWSLNativeCommit(): boolean {
+  if (process.env.GITHUB_DESKTOP_WSL_NATIVE_COMMIT === 'false') {
+    return false
+  }
+  return enableWSLPerformanceOptimizations()
+}
+
+/**
  * Should we allow reporting unhandled rejections as if they were crashes?
  */
 export function enableUnhandledRejectionReporting(): boolean {
