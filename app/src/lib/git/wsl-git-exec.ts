@@ -1,4 +1,6 @@
 import { execFile } from 'child_process'
+import { stat, unlink } from 'fs/promises'
+import * as Path from 'path'
 import { isWSLPath, getWSLDistroName, wslUNCToPosixPath } from '../is-wsl-path'
 import { enableWSLPerformanceOptimizations } from '../feature-flag'
 
@@ -19,27 +21,62 @@ interface IWSLExecOptions {
   readonly timeout?: number
 }
 
+// Subcommands that take .git/index.lock. If a previous Windows git crash left
+// a stale lock, we try to clear it before re-running these.
+const INDEX_WRITING_SUBCOMMANDS = new Set([
+  'add',
+  'apply',
+  'checkout',
+  'checkout-index',
+  'cherry-pick',
+  'clean',
+  'commit',
+  'commit-tree',
+  'merge',
+  'mv',
+  'rebase',
+  'reset',
+  'restore',
+  'revert',
+  'rm',
+  'stash',
+  'submodule',
+  'switch',
+  'update-index',
+  'update-ref',
+])
+
+function needsIndexLock(args: ReadonlyArray<string>): boolean {
+  for (const arg of args) {
+    if (arg.startsWith('-')) {
+      continue
+    }
+    return INDEX_WRITING_SUBCOMMANDS.has(arg)
+  }
+  return false
+}
+
 // Executes a git command inside WSL using `wsl.exe -d <distro> --cd <path> -e git ...`.
 // Bypasses the 9P boundary by running git natively on the Linux filesystem.
 // Only safe for read-only operations (status, log, diff, branch, etc.) that
 // don't need the trampoline credential helper or hook interception.
-export function wslGitExec(
+export async function wslGitExec(
   args: ReadonlyArray<string>,
   repositoryPath: string,
   options?: IWSLExecOptions
 ): Promise<IWSLExecResult> {
   const distro = getWSLDistroName(repositoryPath)
   if (!distro) {
-    return Promise.reject(
-      new Error(`wslGitExec called with non-WSL path: ${repositoryPath}`)
-    )
+    throw new Error(`wslGitExec called with non-WSL path: ${repositoryPath}`)
   }
 
   const posixPath = wslUNCToPosixPath(repositoryPath)
   if (!posixPath) {
-    return Promise.reject(
-      new Error(`Failed to convert WSL path: ${repositoryPath}`)
-    )
+    throw new Error(`Failed to convert WSL path: ${repositoryPath}`)
+  }
+
+  if (needsIndexLock(args)) {
+    await cleanupStaleIndexLock(repositoryPath)
   }
 
   const wslArgs = [
@@ -119,14 +156,20 @@ const WSL_SAFE_SUBCOMMANDS = new Set([
   'merge-base',
   'cat-file',
   'ls-tree',
+  'ls-files',
   'name-rev',
   'check-attr',
   'var',
   'symbolic-ref',
   'reflog',
   'checkout',
+  'checkout-index',
+  'restore',
   'switch',
   'reset',
+  'revert',
+  'clean',
+  'mv',
   'submodule',
   'add',
   'update-index',
@@ -191,4 +234,45 @@ export function canUseWSLGit(
   }
 
   return isWSLSafeGitSubcommand(args)
+}
+
+const STALE_INDEX_LOCK_AGE_MS = 5_000
+
+// Removes a stale `.git/index.lock` only on WSL UNC paths and only when
+// older than STALE_INDEX_LOCK_AGE_MS, to avoid racing a legitimate in-flight
+// git process. Git holds the lock for an index write only — well under 5s.
+export async function cleanupStaleIndexLock(
+  repositoryPath: string
+): Promise<boolean> {
+  if (!__WIN32__ || !isWSLPath(repositoryPath)) {
+    return false
+  }
+
+  const lockPath = Path.join(repositoryPath, '.git', 'index.lock')
+
+  try {
+    const stats = await stat(lockPath)
+    const ageMs = Date.now() - stats.mtimeMs
+
+    if (ageMs < STALE_INDEX_LOCK_AGE_MS) {
+      return false
+    }
+
+    await unlink(lockPath)
+    log.warn(
+      `Removed stale index.lock (age ${ageMs}ms) at ${lockPath}; ` +
+        `previous git process likely crashed.`
+    )
+    return true
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      'code' in error &&
+      (error as NodeJS.ErrnoException).code === 'ENOENT'
+    ) {
+      return false
+    }
+    log.warn(`Failed to inspect/remove ${lockPath}`, error)
+    return false
+  }
 }

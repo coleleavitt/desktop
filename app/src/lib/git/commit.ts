@@ -12,7 +12,7 @@ import { WorkingDirectoryFileChange } from '../../models/status'
 import { unstageAll } from './reset'
 import { ManualConflictResolution } from '../../models/manual-conflict-resolution'
 import { stageManualConflictResolution } from './stage'
-import { wslGitExec } from './wsl-git-exec'
+import { cleanupStaleIndexLock, wslGitExec } from './wsl-git-exec'
 import { isWSLPath } from '../is-wsl-path'
 import { enableWSLNativeCommit } from '../feature-flag'
 
@@ -84,6 +84,8 @@ async function wslCommit(
   message?: string
 ): Promise<IGitStringResult> {
   const fullArgs = ['commit', ...args]
+
+  await cleanupStaleIndexLock(repository.path)
 
   const result = await wslGitExec(fullArgs, repository.path, {
     stdin: message,
