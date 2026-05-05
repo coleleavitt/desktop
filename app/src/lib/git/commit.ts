@@ -1,10 +1,71 @@
-import { git, HookCallbackOptions, parseCommitSHA } from './core'
+import {
+  git,
+  GitError,
+  HookCallbackOptions,
+  IGitStringExecutionOptions,
+  parseCommitSHA,
+} from './core'
 import { stageFiles } from './update-index'
 import { Repository } from '../../models/repository'
 import { WorkingDirectoryFileChange } from '../../models/status'
 import { unstageAll } from './reset'
 import { ManualConflictResolution } from '../../models/manual-conflict-resolution'
 import { stageManualConflictResolution } from './stage'
+
+const statusInPageErrorExitCodes = new Set([3221225478, -1073741818])
+
+function delay(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function isStatusInPageGitError(error: unknown) {
+  return (
+    __WIN32__ &&
+    error instanceof GitError &&
+    statusInPageErrorExitCodes.has(error.result.exitCode)
+  )
+}
+
+async function getCurrentHead(repository: Repository) {
+  const result = await git(
+    ['rev-parse', '--verify', 'HEAD'],
+    repository.path,
+    'getCurrentHead',
+    { successExitCodes: new Set([0, 128]) }
+  )
+
+  return result.exitCode === 0 ? result.stdout.trim() : null
+}
+
+async function gitCommitWithStatusInPageRetry(
+  repository: Repository,
+  args: string[],
+  name: string,
+  options?: IGitStringExecutionOptions
+) {
+  const headBeforeCommit = await getCurrentHead(repository)
+
+  try {
+    return await git(args, repository.path, name, options)
+  } catch (error) {
+    if (!isStatusInPageGitError(error)) {
+      throw error
+    }
+
+    const headAfterFailure = await getCurrentHead(repository)
+
+    if (headAfterFailure !== headBeforeCommit) {
+      throw error
+    }
+
+    log.warn(
+      `Retrying ${name} after Windows STATUS_IN_PAGE_ERROR; HEAD did not change`
+    )
+
+    await delay(500)
+    return git(args, repository.path, name, options)
+  }
+}
 
 /**
  * @param repository repository to execute merge in
@@ -48,9 +109,9 @@ export async function createCommit(
     args.push('--allow-empty')
   }
 
-  const result = await git(
+  const result = await gitCommitWithStatusInPageRetry(
+    repository,
     ['commit', ...args],
-    repository.path,
     'createCommit',
     {
       stdin: message,
@@ -99,7 +160,8 @@ export async function createMergeCommit(
   const otherFiles = files.filter(f => !manualResolutions.has(f.path))
 
   await stageFiles(repository, otherFiles)
-  const result = await git(
+  const result = await gitCommitWithStatusInPageRetry(
+    repository,
     [
       'commit',
       // no-edit here ensures the app does not accidentally invoke the user's editor
@@ -129,7 +191,6 @@ export async function createMergeCommit(
       // commit.
       '--cleanup=strip',
     ],
-    repository.path,
     'createMergeCommit'
   )
   return parseCommitSHA(result)

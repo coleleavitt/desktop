@@ -19,6 +19,10 @@ import { kStringMaxLength } from 'buffer'
 import { withHooksEnv } from '../hooks/with-hooks-env'
 import { coerceToString } from './coerce-to-string'
 import { pushTerminalChunk } from './push-terminal-chunk'
+import { isWSLPath } from '../is-wsl-path'
+
+const STATUS_IN_PAGE_ERROR_UNSIGNED = 3221225478
+const STATUS_IN_PAGE_ERROR_SIGNED = -1073741818
 
 export const isMaxBufferExceededError = (
   error: unknown
@@ -171,16 +175,23 @@ export class GitError extends Error {
       message = coerceToString(result.stdout)
     } else if (
       __WIN32__ &&
-      (result.exitCode === 3221225478 || result.exitCode === -1073741818)
+      (result.exitCode === STATUS_IN_PAGE_ERROR_UNSIGNED ||
+        result.exitCode === STATUS_IN_PAGE_ERROR_SIGNED)
     ) {
-      // 0xC0000046 = STATUS_SHARING_VIOLATION — another process has a file
-      // locked (commonly Windows Defender scanning .git/ on WSL paths).
-      // Node reports NTSTATUS as unsigned (3221225478) or signed (-1073741818).
+      // 0xC0000006 = STATUS_IN_PAGE_ERROR. Windows was unable to page in
+      // data needed by the Git process. On WSL UNC paths this is commonly
+      // caused by the Windows/WSL filesystem provider, antivirus scanning, or
+      // other transient I/O failures. Node may report NTSTATUS as unsigned
+      // (3221225478) or signed (-1073741818).
+      const wslHint = isWSLPath(result.path)
+        ? ' This repository appears to be stored in WSL; GitHub Desktop uses Windows Git for commit operations so repository hooks can be intercepted correctly.'
+        : ''
+
       message =
-        'A file in the repository is locked by another process ' +
-        '(Windows error: sharing violation). This is commonly caused by ' +
-        'antivirus software scanning repository files. Try excluding this ' +
-        'repository from real-time scanning, or retry in a moment.'
+        'Git for Windows crashed while accessing this repository ' +
+        '(Windows error: STATUS_IN_PAGE_ERROR, 0xC0000006).' +
+        wslHint +
+        ' Try the operation again, run Git from inside WSL, or move the repository to the Windows filesystem.'
       rawMessage = false
     } else {
       message = `Unknown error (exit code ${result.exitCode})`
