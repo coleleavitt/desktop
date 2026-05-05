@@ -52,8 +52,8 @@ describe('wsl-git-exec', () => {
       )
     })
 
-    it('returns false for push', () => {
-      assert.equal(isWSLSafeGitSubcommand(['push', 'origin', 'main']), false)
+    it('returns true for push (SSH uses WSL keys)', () => {
+      assert.equal(isWSLSafeGitSubcommand(['push', 'origin', 'main']), true)
     })
 
     it('returns false for commit', () => {
@@ -64,8 +64,8 @@ describe('wsl-git-exec', () => {
       assert.equal(isWSLSafeGitSubcommand(['fetch', 'origin']), true)
     })
 
-    it('returns false for pull', () => {
-      assert.equal(isWSLSafeGitSubcommand(['pull']), false)
+    it('returns true for pull (SSH uses WSL keys)', () => {
+      assert.equal(isWSLSafeGitSubcommand(['pull']), true)
     })
 
     it('returns false for clone', () => {
@@ -119,8 +119,8 @@ describe('wsl-git-exec', () => {
       assert.equal(canUseWSLGit([], wslPath), false)
     })
 
-    it('returns false for unsafe subcommands on WSL paths', () => {
-      assert.equal(canUseWSLGit(['push', 'origin', 'main'], wslPath), false)
+    it('returns false for clone on WSL paths', () => {
+      assert.equal(canUseWSLGit(['clone', 'url'], wslPath), false)
     })
   })
 })
