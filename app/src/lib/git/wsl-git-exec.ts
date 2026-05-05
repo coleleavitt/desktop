@@ -34,6 +34,7 @@ const INDEX_WRITING_SUBCOMMANDS = new Set([
   'commit-tree',
   'merge',
   'mv',
+  'pull',
   'rebase',
   'reset',
   'restore',
@@ -185,6 +186,8 @@ const WSL_SAFE_SUBCOMMANDS = new Set([
   'read-tree',
   'fetch',
   'ls-remote',
+  'push',
+  'pull',
 ])
 
 export function isWSLSafeGitSubcommand(
