@@ -1,11 +1,38 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert'
 import {
+  buildWSLGitExecErrorMessage,
   canUseWSLGit,
   isWSLSafeGitSubcommand,
 } from '../../../src/lib/git/wsl-git-exec'
 
 describe('wsl-git-exec', () => {
+  describe('buildWSLGitExecErrorMessage', () => {
+    it('does not append stderr already included in the error message', () => {
+      const stderr = 'fatal: not a git repository'
+      const error = new Error(`Command failed: wsl.exe -d Ubuntu\n${stderr}`)
+
+      const message = buildWSLGitExecErrorMessage(error, stderr)
+
+      assert.equal(
+        message,
+        `wsl.exe git failed: Command failed: wsl.exe -d Ubuntu\n${stderr}`
+      )
+    })
+
+    it('appends stderr missing from the error message', () => {
+      const message = buildWSLGitExecErrorMessage(
+        new Error('spawn wsl.exe ENOENT'),
+        'wsl.exe not found'
+      )
+
+      assert.equal(
+        message,
+        'wsl.exe git failed: spawn wsl.exe ENOENT\nstderr: wsl.exe not found'
+      )
+    })
+  })
+
   describe('isWSLSafeGitSubcommand', () => {
     it('returns true for status', () => {
       assert.equal(

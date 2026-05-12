@@ -21,6 +21,24 @@ interface IWSLExecOptions {
   readonly timeout?: number
 }
 
+function coerceExecOutput(value: string | Buffer): string {
+  return Buffer.isBuffer(value) ? value.toString('utf8') : value
+}
+
+export function buildWSLGitExecErrorMessage(
+  error: Error,
+  stderr: string | Buffer
+): string {
+  const message = error.message || String(error)
+  const stderrText = coerceExecOutput(stderr)
+  const stderrSuffix =
+    stderrText.length > 0 && !message.includes(stderrText)
+      ? `\nstderr: ${stderrText}`
+      : ''
+
+  return `wsl.exe git failed: ${message}${stderrSuffix}`
+}
+
 // Subcommands that take .git/index.lock. If a previous Windows git crash left
 // a stale lock, we try to clear it before re-running these.
 const INDEX_WRITING_SUBCOMMANDS = new Set([
@@ -115,11 +133,7 @@ export async function wslGitExec(
         return
       }
 
-      reject(
-        new Error(
-          `wsl.exe git failed: ${err.message}\nstderr: ${stderr}`
-        )
-      )
+      reject(new Error(buildWSLGitExecErrorMessage(err, stderr)))
     })
 
     if (options?.stdin !== undefined && cp.stdin) {

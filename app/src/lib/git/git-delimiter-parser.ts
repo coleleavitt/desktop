@@ -1,5 +1,9 @@
 import { splitBuffer } from '../split-buffer'
 
+function isNewlineRecord(value: string): boolean {
+  return value === '\n' || value === '\r\n' || value === '\r'
+}
+
 /**
  * Create a new parser suitable for parsing --format output from commands such
  * as `git log`, `git stash`, and other commands that are not derived from
@@ -71,7 +75,7 @@ export function createForEachRefParser<T extends Record<string, string>>(
     // to be empty anyway (due to %00 at the start of --format)
     for (let i = 1; i < records.length - 1; i++) {
       if (i % (keys.length + 1) === 0) {
-        if (records[i] !== '\n') {
+        if (!isNewlineRecord(records[i])) {
           throw new Error('Expected newline')
         }
         continue
