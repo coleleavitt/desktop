@@ -1567,7 +1567,7 @@ export class GitStore extends BaseStore {
             // chosen to always discard the changes permanently if trash failes.
             // We need to remove the file manually.
             if (file.status.kind === AppFileStatusKind.Untracked) {
-              await rm(Path.join(this.repository.path, file.path))
+              await this.removeUntrackedPath(file.path)
             }
           }
         } else if (moveToTrash === false) {
@@ -1575,7 +1575,7 @@ export class GitStore extends BaseStore {
           // discard the changes permanently. We need to remove the file
           // manually.
           if (file.status.kind === AppFileStatusKind.Untracked) {
-            await rm(Path.join(this.repository.path, file.path))
+            await this.removeUntrackedPath(file.path)
           }
         }
       }
@@ -1643,6 +1643,10 @@ export class GitStore extends BaseStore {
       )
       await checkoutIndex(this.repository, necessaryPathsToCheckout)
     })
+  }
+
+  private removeUntrackedPath(path: string): Promise<void> {
+    return rm(Path.join(this.repository.path, path), { recursive: true })
   }
 
   public async discardChangesFromSelection(

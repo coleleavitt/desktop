@@ -1,6 +1,6 @@
 import { describe, it, TestContext } from 'node:test'
 import assert from 'node:assert'
-import { writeFile } from 'fs/promises'
+import { mkdir, stat, writeFile } from 'fs/promises'
 import * as Path from 'path'
 import { exec } from 'dugite'
 
@@ -10,7 +10,10 @@ import {
   setupFixtureRepository,
 } from '../helpers/repositories'
 import { GitStore } from '../../src/lib/stores'
-import { AppFileStatusKind } from '../../src/models/status'
+import {
+  AppFileStatusKind,
+  WorkingDirectoryFileChange,
+} from '../../src/models/status'
 import { Repository } from '../../src/models/repository'
 import { TipState, IValidBranch } from '../../src/models/tip'
 import { getCommit, getRemotes } from '../../src/lib/git'
@@ -22,6 +25,7 @@ import {
 } from '../helpers/repository-scaffolding'
 import { BranchType } from '../../src/models/branch'
 import { TestStatsStore } from '../helpers/test-stats-store'
+import { DiffSelection, DiffSelectionType } from '../../src/models/diff'
 
 describe('GitStore', () => {
   describe('loadCommitBatch', () => {
@@ -104,6 +108,33 @@ describe('GitStore', () => {
     const files = status.workingDirectory.files
 
     assert.equal(files.length, 0)
+  })
+
+  it('can discard an untracked directory when trashing fails', async t => {
+    const repo = await setupEmptyRepository(t)
+    const gitStore = new GitStore(repo, shell, new TestStatsStore())
+
+    const readmeFile = 'README.md'
+    await writeFile(Path.join(repo.path, readmeFile), 'SOME WORDS GO HERE\n')
+
+    await exec(['add', readmeFile], repo.path)
+    await exec(['commit', '-m', 'added readme file'], repo.path)
+
+    const untrackedDirectory = 'untracked-directory'
+    const untrackedDirectoryPath = Path.join(repo.path, untrackedDirectory)
+
+    await mkdir(untrackedDirectoryPath)
+    await writeFile(Path.join(untrackedDirectoryPath, 'nested-file'), 'words\n')
+
+    const file = new WorkingDirectoryFileChange(
+      untrackedDirectory,
+      { kind: AppFileStatusKind.Untracked },
+      DiffSelection.fromInitialSelection(DiffSelectionType.All)
+    )
+
+    await gitStore.discardChanges([file])
+
+    await assert.rejects(stat(untrackedDirectoryPath), { code: 'ENOENT' })
   })
 
   describe('undo first commit', () => {
