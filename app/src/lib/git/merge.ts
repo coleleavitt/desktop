@@ -5,6 +5,9 @@ import { GitError } from 'dugite'
 import { Repository } from '../../models/repository'
 import { pathExists } from '../../ui/lib/path-exists'
 import { createMultiOperationTerminalOutputCallback } from './multi-operation-terminal-output'
+import { isWSLPath } from '../is-wsl-path'
+import { enableWSLPerformanceOptimizations } from '../feature-flag'
+import { wslGitExec } from './wsl-git-exec'
 
 export enum MergeResult {
   /** The merge completed successfully */
@@ -129,6 +132,25 @@ export async function getMergeBase(
  * @param repository where to abort the merge
  */
 export async function abortMerge(repository: Repository): Promise<void> {
+  // merge --abort doesn't need hooks or credentials — it just resets HEAD
+  // and the index back to pre-merge state. Route through WSL native git to
+  // avoid 9P latency and stale index lock issues from cross-boundary access.
+  if (
+    __WIN32__ &&
+    enableWSLPerformanceOptimizations() &&
+    isWSLPath(repository.path)
+  ) {
+    const result = await wslGitExec(
+      ['merge', '--abort'],
+      repository.path
+    )
+    if (result.exitCode !== 0) {
+      const stderr = result.stderr.toString('utf8')
+      throw new Error(`merge --abort failed (exit ${result.exitCode}): ${stderr}`)
+    }
+    return
+  }
+
   await git(['merge', '--abort'], repository.path, 'abortMerge')
 }
 
