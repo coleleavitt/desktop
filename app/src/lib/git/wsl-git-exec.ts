@@ -126,21 +126,67 @@ export async function wslGitExec(
   }
 
   return new Promise<IWSLExecResult>((resolve, reject) => {
+    let settled = false
+
+    const fail = (err: Error) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      reject(err)
+    }
+
     const cp = execFile('wsl.exe', wslArgs, opts, (err, stdout, stderr) => {
+      if (settled) {
+        return
+      }
+      settled = true
+
       if (!err || typeof err.code === 'number') {
         const exitCode = typeof err?.code === 'number' ? err.code : 0
         resolve({ stdout, stderr, exitCode })
         return
       }
 
+      // Distinguish timeout kills from real git errors
+      if ('killed' in err && err.killed) {
+        reject(
+          new Error(
+            `wsl.exe git timed out after ${opts.timeout}ms: ${args.join(' ')}`
+          )
+        )
+        return
+      }
+
       reject(new Error(buildWSLGitExecErrorMessage(err, stderr)))
     })
 
+    // Handle spawn failures (e.g. wsl.exe not found, WSL unresponsive)
+    cp.on('error', (err: Error) => {
+      fail(
+        new Error(
+          `wsl.exe failed to spawn: ${err.message} (args: ${args.join(' ')})`
+        )
+      )
+    })
+
     if (options?.stdin !== undefined && cp.stdin) {
-      if (options.stdinEncoding) {
-        cp.stdin.end(options.stdin, options.stdinEncoding)
-      } else {
-        cp.stdin.end(options.stdin)
+      // Guard against EPIPE if wsl.exe dies before stdin is written
+      cp.stdin.on('error', () => {})
+      try {
+        if (options.stdinEncoding) {
+          cp.stdin.end(options.stdin, options.stdinEncoding)
+        } else {
+          cp.stdin.end(options.stdin)
+        }
+      } catch (err: unknown) {
+        fail(
+          new Error(
+            `Failed to write stdin to wsl.exe: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          )
+        )
       }
     }
   })
@@ -253,11 +299,13 @@ export function canUseWSLGit(
   return isWSLSafeGitSubcommand(args)
 }
 
-const STALE_INDEX_LOCK_AGE_MS = 5_000
+// 10s threshold accounts for WSL 9P filesystem mtime lag and NTP drift.
+// A legitimate git index write completes well under this.
+const STALE_INDEX_LOCK_AGE_MS = 10_000
 
 // Removes a stale `.git/index.lock` only on WSL UNC paths and only when
 // older than STALE_INDEX_LOCK_AGE_MS, to avoid racing a legitimate in-flight
-// git process. Git holds the lock for an index write only — well under 5s.
+// git process.
 export async function cleanupStaleIndexLock(
   repositoryPath: string
 ): Promise<boolean> {
@@ -271,7 +319,8 @@ export async function cleanupStaleIndexLock(
     const stats = await stat(lockPath)
     const ageMs = Date.now() - stats.mtimeMs
 
-    if (ageMs < STALE_INDEX_LOCK_AGE_MS) {
+    // Negative age means clock skew (mtime in the future) — don't touch it
+    if (ageMs < STALE_INDEX_LOCK_AGE_MS || ageMs < 0) {
       return false
     }
 

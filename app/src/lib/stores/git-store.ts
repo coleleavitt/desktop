@@ -100,6 +100,20 @@ import { rm, stat } from 'fs/promises'
 import { findForkedRemotesToPrune } from './helpers/find-forked-remotes-to-prune'
 import { findDefaultBranch } from '../find-default-branch'
 
+// Critical WSL errors that should NOT be swallowed by performFailableOperation.
+// These indicate the WSL subsystem itself is broken — retrying silently is
+// pointless and masks the real problem from the user.
+const CRITICAL_WSL_ERROR_PATTERNS = [
+  'wsl.exe failed to spawn',
+  'wsl.exe git timed out',
+  'Failed to write stdin to wsl.exe',
+]
+
+function isCriticalWSLError(error: Error): boolean {
+  const msg = error.message
+  return CRITICAL_WSL_ERROR_PATTERNS.some(p => msg.includes(p))
+}
+
 /** The number of commits to load from history per batch. */
 const CommitBatchSize = 100
 
@@ -934,6 +948,15 @@ export class GitStore extends BaseStore {
       const result = await fn()
       return result
     } catch (e) {
+      // Don't swallow critical infrastructure errors — these indicate WSL
+      // is unresponsive or the process couldn't spawn. Callers need to know.
+      if (e instanceof Error && isCriticalWSLError(e)) {
+        throw new ErrorWithMetadata(e, {
+          repository: this.repository,
+          ...errorMetadata,
+        })
+      }
+
       e = new ErrorWithMetadata(e, {
         repository: this.repository,
         ...errorMetadata,
